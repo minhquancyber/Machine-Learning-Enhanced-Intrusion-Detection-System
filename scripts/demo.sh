@@ -185,7 +185,7 @@ demo_ml_training() {
          -H "Content-Type: application/json" \
          -d '{
            "dataset_filename": "nsl_kdd_sample.csv",
-           "algorithms": ["decision_tree", "knn", "ensemble"],
+           "algorithms": ["decision_tree", "knn", "random_forest", "ensemble"],
            "target_column": "label",
            "test_size": 0.2,
            "hyperparameters": {
