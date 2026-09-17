@@ -76,7 +76,7 @@ async def root():
         "version": "1.0.0",
         "description": "Trains and evaluates ML models for network intrusion detection",
         "accuracy_target": ACCURACY_TARGET,
-        "supported_algorithms": ["decision_tree", "knn", "ensemble"],
+        "supported_algorithms": ["decision_tree", "knn", "random_forest", "ensemble"],
         "endpoints": {
             "health": "/health",
             "train": "/train",
@@ -138,6 +138,14 @@ async def train_models(request: TrainingRequest):
             )
             training_results["knn"] = knn_result
             logger.info(f"k-NN training completed: {knn_result['accuracy']:.4f} accuracy")
+
+        if "random_forest" in request.algorithms:
+            logger.info("Training Random Forest...")
+            rf_result = await ml_trainer.train_random_forest(
+                X, y, feature_names, request.hyperparameters.get("random_forest", {})
+            )
+            training_results["random_forest"] = rf_result
+            logger.info(f"Random Forest training completed: {rf_result['accuracy']:.4f} accuracy")
         
         if "ensemble" in request.algorithms:
             logger.info("Training Ensemble...")
@@ -341,7 +349,7 @@ async def get_service_stats():
             "training_results": len(result_files),
             "accuracy_target": ACCURACY_TARGET,
             "service_uptime": "running",
-            "supported_algorithms": ["decision_tree", "knn", "ensemble"]
+            "supported_algorithms": ["decision_tree", "knn", "random_forest", "ensemble"]
         }
         
     except Exception as e:

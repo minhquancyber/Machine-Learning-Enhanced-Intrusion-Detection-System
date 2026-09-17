@@ -20,15 +20,15 @@ rebuild_service() {
     
     if [ "$FORCE_CLEAN" = "true" ]; then
         echo "🧹 Force cleaning Docker cache..."
-        docker-compose down
+        docker compose down
         docker system prune -f
     fi
     
     # Build with no cache and cache-busting
-    docker-compose build --no-cache --build-arg CACHEBUST=$CACHEBUST $service
+    docker compose build --no-cache --build-arg CACHEBUST=$CACHEBUST $service
     
     # Restart the service
-    docker-compose up -d $service
+    docker compose up -d $service
     
     echo "✅ $service rebuilt successfully!"
 }
@@ -52,7 +52,7 @@ test_service_health() {
     done
     
     echo "❌ $service health check failed"
-    docker-compose logs --tail=10 $service
+    docker compose logs --tail=10 $service
     return 1
 }
 
@@ -80,16 +80,16 @@ case $SERVICE in
         
         if [ "$FORCE_CLEAN" = "true" ]; then
             echo "🧹 Force cleaning Docker cache..."
-            docker-compose down
+            docker compose down
             docker system prune -f
         fi
         
         # Rebuild all Python services
-        docker-compose build --no-cache --build-arg CACHEBUST=$CACHEBUST \
+        docker compose build --no-cache --build-arg CACHEBUST=$CACHEBUST \
             ml-trainer feature-extractor realtime-detector traffic-replay
         
         # Start all services
-        docker-compose up -d
+        docker compose up -d
         
         # Test all services
         echo "🏥 Testing all services..."

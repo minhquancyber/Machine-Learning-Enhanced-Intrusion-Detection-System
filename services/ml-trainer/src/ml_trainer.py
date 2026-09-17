@@ -279,6 +279,117 @@ class MLTrainer:
         except Exception as e:
             logger.error(f"Error training k-NN: {str(e)}")
             raise
+
+    # train random forest
+    async def train_random_forest(
+        self, 
+        X: np.ndarray, 
+        y: np.ndarray, 
+        feature_names: List[str],
+        hyperparameters: Dict[str, Any] = None
+    ) -> Dict[str, Any]:
+        """
+        Train Random Forest classifier
+        
+        Args:
+            X: Feature matrix
+            y: Target labels
+            feature_names: List of feature names
+            hyperparameters: Optional hyperparameter overrides
+            
+        Returns:
+            Dictionary with training results
+        """
+        try:
+            logger.info("Training Random Forest classifier...")
+            start_time = time.time()
+            
+            X_train, X_test, y_train, y_test = train_test_split(
+                X, y, test_size=0.2, random_state=self.random_state, stratify=y
+            )
+            
+            default_params = {
+                'n_estimators': [50, 100, 200],
+                'max_depth': [10, 20, None],
+                'min_samples_split': [2, 5, 10],
+                'min_samples_leaf': [1, 2, 4]
+            }
+            
+            if hyperparameters:
+                processed_params = {}
+                for key, value in hyperparameters.items():
+                    if not isinstance(value, list):
+                        processed_params[key] = [value]
+                    else:
+                        processed_params[key] = value
+                default_params.update(processed_params)
+            
+            rf = RandomForestClassifier(random_state=self.random_state, n_jobs=-1)
+            
+            grid_search = GridSearchCV(
+                rf, default_params, cv=5, scoring='accuracy', n_jobs=-1, verbose=1
+            )
+            
+            grid_search.fit(X_train, y_train)
+            best_model = grid_search.best_estimator_
+            
+            y_pred = best_model.predict(X_test)
+            
+            accuracy = accuracy_score(y_test, y_pred)
+            precision = precision_score(y_test, y_pred, average='weighted')
+            recall = recall_score(y_test, y_pred, average='weighted')
+            f1 = f1_score(y_test, y_pred, average='weighted')
+            
+            cv_scores = cross_val_score(best_model, X, y, cv=5)
+            
+            try:
+                safe_feature_names = [str(name) for name in feature_names]
+                feature_importance = dict(zip(safe_feature_names, best_model.feature_importances_))
+                sorted_features = sorted(feature_importance.items(), key=lambda x: x[1], reverse=True)
+            except Exception as e:
+                logger.error(f"Error processing feature importance: {str(e)}")
+                feature_importance = {}
+                sorted_features = []
+            
+            training_time = time.time() - start_time
+            
+            safe_top_features = []
+            try:
+                for feature_name, importance in sorted_features[:10]:
+                    safe_top_features.append({'feature': str(feature_name), 'importance': float(importance)})
+            except Exception as e:
+                logger.error(f"Error formatting top features: {str(e)}")
+                safe_top_features = []
+            
+            safe_best_params = {}
+            try:
+                for key, value in grid_search.best_params_.items():
+                    safe_best_params[str(key)] = str(value) if hasattr(value, 'stem') else value
+            except Exception as e:
+                logger.error(f"Error processing best_params: {str(e)}")
+                safe_best_params = {}
+            
+            result = {
+                'model': best_model,
+                'algorithm': 'random_forest',
+                'accuracy': accuracy,
+                'precision': precision,
+                'recall': recall,
+                'f1_score': f1,
+                'cv_mean': cv_scores.mean(),
+                'cv_std': cv_scores.std(),
+                'best_params': safe_best_params,
+                'feature_importance': feature_importance,
+                'top_features': safe_top_features,
+                'training_time': training_time
+            }
+            
+            logger.info(f"Random Forest training completed. Accuracy: {accuracy:.4f}")
+            return result
+            
+        except Exception as e:
+            logger.error(f"Error training Random Forest: {str(e)}")
+            raise
     
     async def train_ensemble(
         self, 
