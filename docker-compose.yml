@@ -1,0 +1,223 @@
+# Docker Compose configuration for Suricata ML-IDS
+
+services:
+  # Suricata IDS Service
+  suricata:
+    build:
+      context: ./services/suricata
+      dockerfile: Dockerfile
+    container_name: suricata-ids
+    volumes:
+      - ./data/pcaps:/var/log/suricata/pcaps:ro
+      - ./data/logs:/var/log/suricata
+      - ./services/suricata/rules:/etc/suricata/rules
+      - ./services/suricata/config:/etc/suricata
+    networks:
+      - ids-network
+    cap_add:
+      - NET_ADMIN
+      - SYS_NICE
+    depends_on:
+      - elasticsearch
+    healthcheck:
+      test: ["CMD", "suricata", "--build-info"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Feature Extractor Service
+  feature-extractor:
+    build:
+      context: ./services/feature-extractor
+      dockerfile: Dockerfile
+    container_name: feature-extractor
+    ports:
+      - "8001:8001"
+    volumes:
+      - ./data/pcaps:/app/pcaps:ro
+      - ./data/datasets:/app/datasets
+      - ./data/logs:/app/logs:ro
+    environment:
+      - PYTHONUNBUFFERED=1
+      - LOG_LEVEL=INFO
+    networks:
+      - ids-network
+    depends_on:
+      - suricata
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8001/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ML Trainer Service  
+  ml-trainer:
+    build:
+      context: ./services/ml-trainer
+      dockerfile: Dockerfile
+      args:
+        CACHEBUST: ${CACHEBUST:-1}
+    container_name: ml-trainer
+    ports:
+      - "8002:8002"
+    volumes:
+      - ./data/datasets:/app/datasets:ro
+      - ./data/models:/app/models
+      - ./data/results:/app/results
+    environment:
+      - PYTHONUNBUFFERED=1
+      - LOG_LEVEL=INFO
+      - ML_ACCURACY_TARGET=0.90
+    networks:
+      - ids-network
+    depends_on:
+      - feature-extractor
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8002/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Real-time Detector Service
+  realtime-detector:
+    build:
+      context: ./services/realtime-detector
+      dockerfile: Dockerfile
+    container_name: realtime-detector
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data/models:/app/models:ro
+      - ./data/logs:/app/logs:ro
+    environment:
+      - PYTHONUNBUFFERED=1
+      - LOG_LEVEL=INFO
+      - LATENCY_TARGET_MS=100
+      - REDIS_URL=redis://redis:6379
+    networks:
+      - ids-network
+    depends_on:
+      - ml-trainer
+      - redis
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  # Traffic Replay Service
+  traffic-replay:
+    build:
+      context: ./services/traffic-replay
+      dockerfile: Dockerfile
+    container_name: traffic-replay
+    ports:
+      - "8003:8003"
+    volumes:
+      - ./data/pcaps:/app/pcaps
+    environment:
+      - PYTHONUNBUFFERED=1
+      - LOG_LEVEL=INFO
+      - TARGET_INTERFACE=eth0
+    networks:
+      - ids-network
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8003/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Elasticsearch Service for SIEM and monitoring
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
+    container_name: elasticsearch
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - xpack.security.enrollment.enabled=false
+      - "ES_JAVA_OPTS=-Xms1g -Xmx1g"
+      - cluster.name=ids-cluster
+      - node.name=ids-node-1
+    volumes:
+      - elasticsearch-data:/usr/share/elasticsearch/data
+    ports:
+      - "9200:9200"
+    networks:
+      - ids-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9200/_cluster/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # Kibana Dashboards for visualization
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.11.0
+    container_name: kibana
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+      - xpack.security.enabled=false
+      - xpack.encryptedSavedObjects.encryptionKey=fhjskloppd678ehkdfdlliverpoolfcr
+    ports:
+      - "5601:5601"
+    networks:
+      - ids-network
+    depends_on:
+      - elasticsearch
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5601/api/status"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # Redis for message queuing and caching
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - ids-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+
+  # Real-time Log Shipper (replaces Filebeat)
+  log-shipper:
+    build:
+      context: ./services/log-shipper
+    container_name: log-shipper
+    networks:
+      - ids-network
+    volumes:
+      - ./data/logs:/var/log/suricata:ro
+    depends_on:
+      - elasticsearch
+      - suricata
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+    healthcheck:
+      test: ["CMD", "python", "-c", "import asyncio; import elasticsearch; print('OK')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  elasticsearch-data:
+    driver: local
+  redis-data:
+    driver: local
+
+networks:
+  ids-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16

@@ -1,0 +1,14 @@
+cluster.name: ids-cluster
+node.name: opensearch-node1
+network.host: 0.0.0.0
+http.port: 9200
+discovery.seed_hosts: ["opensearch-node1"]
+cluster.initial_cluster_manager_nodes: ["opensearch-node1"]
+bootstrap.memory_lock: true
+
+# Security settings (disabled for demo)
+plugins.security.disabled: true
+
+# Performance settings
+indices.query.bool.max_clause_count: 10000
+search.max_buckets: 100000

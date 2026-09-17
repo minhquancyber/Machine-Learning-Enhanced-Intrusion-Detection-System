@@ -1,0 +1,7 @@
+server.name: opensearch-dashboards
+server.host: "0.0.0.0"
+opensearch.hosts: ["http://opensearch:9200"]
+
+# Security settings (disabled for demo)
+opensearch_security.multitenancy.enabled: false
+opensearch_security.readonly_mode.roles: []
