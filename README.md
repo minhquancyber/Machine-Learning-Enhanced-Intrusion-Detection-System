@@ -169,14 +169,6 @@ After running the demo, access these interfaces:
 - **Performance metrics** and comparative analysis
 - **Academic-grade documentation** and methodology
 
-## 🤝 Contributing
-
-We welcome contributions! See our [Contributing Guide](CONTRIBUTING.md) for:
-- Code style guidelines
-- Development setup
-- Testing procedures
-- Pull request process
-
 ## 📄 License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
