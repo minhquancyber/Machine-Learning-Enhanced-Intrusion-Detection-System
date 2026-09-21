@@ -143,3 +143,4 @@ Network Traffic → Suricata → eve.json → Log Shipper → Elasticsearch → 
 - **CSV**: Dataset processing and feature extraction
 - **PCAP**: Network packet capture analysis
 - **YAML**: Configuration and deployment files
+  
