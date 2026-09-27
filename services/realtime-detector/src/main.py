@@ -54,6 +54,7 @@ class DetectionRequest(BaseModel):
     timestamp: Optional[float] = None
     source_ip: Optional[str] = None
     dest_ip: Optional[str] = None
+    attack_type: Optional[str] = None 
 
 class DetectionResponse(BaseModel):
     prediction: str
@@ -108,6 +109,7 @@ async def send_to_elasticsearch(response: DetectionResponse, request: DetectionR
             "threat_score": response.threat_score,
             "source_ip": request.source_ip or "unknown",
             "dest_ip": request.dest_ip or "unknown",
+            "attack_type": request.attack_type or "unknown",   
             "processing_time_ms": response.processing_time_ms,
             "model": "ensemble",
             "features": request.features

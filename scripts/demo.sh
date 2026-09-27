@@ -198,210 +198,211 @@ demo_ml_training() {
     print_success "ML training demo with NSL-KDD completed!"
 }
 
+# Helper: gọi /detect với 1 bộ feature, LẤY KẾT QUẢ ML THẬT.
+# main.py (realtime-detector) tự động ghi vào ml-detections-* khi threat_score > 0.1
+# hoặc prediction == "attack" — nên script này KHÔNG ghi tay vào ml-detections- nữa,
+# chỉ gửi thêm attack_type trong payload để main.py ghi kèm luôn trong bản ghi tự động.
+# Script chỉ tự ghi thêm vào suricata-alerts-* (index này không có ai tự động ghi).
+run_detect_and_index() {
+    local label="$1"          # nhãn hiển thị, vd "DoS Attack (SYN Flood pattern)"
+    local attack_type="$2"    # dos | probe | r2l | u2r | normal
+    local category="$3"       # mô tả category cho Suricata-style alert
+    local signature="$4"      # signature text cho alert
+    local severity="$5"       # 1..3
+    local src_ip="$6"
+    local dest_ip="$7"
+    local src_port="$8"
+    local dest_port="$9"
+    local proto="${10}"
+    local features_json="${11}"   # JSON object của "features"
+
+    print_demo "$label"
+
+    # 1) GỌI ML THẬT — kèm attack_type để main.py ghi luôn vào bản ghi tự động
+    local detect_payload
+    detect_payload=$(jq -n --argjson features "$features_json" \
+        --arg src_ip "$src_ip" --arg dest_ip "$dest_ip" --arg attack_type "$attack_type" \
+        '{features: $features, source_ip: $src_ip, dest_ip: $dest_ip, attack_type: $attack_type}')
+
+    local detect_response
+    detect_response=$(curl -s -X POST "http://localhost:8080/detect" \
+        -H "Content-Type: application/json" \
+        -d "$detect_payload")
+
+    if [ -z "$detect_response" ] || ! echo "$detect_response" | jq -e . > /dev/null 2>&1; then
+        print_error "Không nhận được phản hồi hợp lệ từ realtime-detector cho: $label"
+        return 1
+    fi
+
+    # 2) TRÍCH kết quả thật từ ML — không tự gán tay
+    local prediction confidence threat_score processing_time_ms
+    prediction=$(echo "$detect_response" | jq -r '.prediction // "unknown"')
+    confidence=$(echo "$detect_response" | jq -r '.confidence // 0')
+    threat_score=$(echo "$detect_response" | jq -r '.threat_score // 0')
+    processing_time_ms=$(echo "$detect_response" | jq -r '.processing_time_ms // 0')
+
+    echo "$detect_response" | jq '{prediction: .prediction, confidence: .confidence, threat_score: .threat_score, processing_time_ms: .processing_time_ms}'
+
+    # 3) Chỉ tạo Suricata-style alert khi ML THẬT SỰ gắn cờ là tấn công.
+    #    Index này không bị ai tự động ghi nên không lo trùng lặp.
+    local now
+    now=$(date -u +%Y-%m-%dT%H:%M:%S.000Z)
+
+    if [ "$prediction" != "normal" ] && [ "$prediction" != "benign" ]; then
+        local alert_doc
+        alert_doc=$(jq -n \
+            --arg ts "$now" \
+            --arg signature "$signature" \
+            --arg category "$category" \
+            --argjson severity "$severity" \
+            --arg attack_type "$attack_type" \
+            --arg src_ip "$src_ip" --arg dest_ip "$dest_ip" \
+            --argjson src_port "$src_port" --argjson dest_port "$dest_port" \
+            --arg proto "$proto" \
+            --arg prediction "$prediction" \
+            --argjson confidence "$confidence" \
+            --argjson threat_score "$threat_score" \
+            '{
+                "@timestamp": $ts,
+                event_type: "alert",
+                alert: {
+                    signature: $signature,
+                    category: $category,
+                    severity: $severity,
+                    attack_type: $attack_type
+                },
+                src_ip: $src_ip,
+                dest_ip: $dest_ip,
+                src_port: $src_port,
+                dest_port: $dest_port,
+                proto: $proto,
+                ml_verdict: {
+                    prediction: $prediction,
+                    confidence: $confidence,
+                    threat_score: $threat_score
+                }
+            }')
+
+        curl -s -X POST "http://localhost:9200/suricata-alerts-$(date +%Y.%m)/_doc" \
+             -H "Content-Type: application/json" \
+             -d "$alert_doc" > /dev/null
+
+        print_success "  → ML gắn cờ '$prediction' (confidence=$confidence, threat_score=$threat_score) → đã ghi alert vào suricata-alerts-*"
+    else
+        print_status "  → ML gắn cờ '$prediction' → KHÔNG tạo alert (đúng như kỳ vọng cho traffic bình thường)"
+    fi
+
+    print_status "  → ml-detections-* sẽ được realtime-detector tự ghi (kèm attack_type=$attack_type), không ghi tay từ script."
+}
+
 # Function to run real-time detection demo
 demo_realtime_detection() {
     print_demo "Running Comprehensive Real-time Detection Demo..."
     print_demo "Testing all NSL-KDD attack categories: DoS, Probe, R2L, U2R + Normal traffic"
     
-    # 1. Normal Traffic Simulation
-    print_demo "🟢 Testing Normal Network Traffic (Web browsing)..."
-    curl -X POST "http://localhost:8080/detect" \
-         -H "Content-Type: application/json" \
-         -d '{
-           "features": {
-             "total_packets": 150,
-             "total_bytes": 15000,
-             "avg_packet_size": 100.0,
-             "duration": 5.0,
-             "tcp_ratio": 0.8,
-             "udp_ratio": 0.2,
-             "icmp_ratio": 0.0,
-             "packets_per_second": 30.0,
-             "unique_src_ips": 2,
-             "unique_dst_ips": 3,
-             "tcp_syn_ratio": 0.6,
-             "well_known_ports": 0.6,
-             "high_ports": 0.4,
-             "payload_entropy": 7.5,
-             "suspicious_flags": 0.05,
-             "http_requests": 10,
-             "dns_queries": 5,
-             "tls_handshakes": 3
-           },
-           "source_ip": "192.168.1.100",
-           "dest_ip": "10.0.0.50"
-         }' | jq '{prediction: .prediction, confidence: .confidence, threat_score: .threat_score, processing_time_ms: .processing_time_ms}'
-    
+    # 1. Normal Traffic Simulation — feature giả lập, nhưng ML thật đánh giá
+    run_detect_and_index \
+        "🟢 Testing Normal Network Traffic (Web browsing)..." \
+        "normal" "Normal Traffic" "Baseline Normal Traffic" 3 \
+        "192.168.1.100" "10.0.0.50" 54321 80 "TCP" \
+        '{
+            "total_packets": 150, "total_bytes": 15000, "avg_packet_size": 100.0,
+            "duration": 5.0, "tcp_ratio": 0.8, "udp_ratio": 0.2, "icmp_ratio": 0.0,
+            "packets_per_second": 30.0, "unique_src_ips": 2, "unique_dst_ips": 3,
+            "tcp_syn_ratio": 0.6, "well_known_ports": 0.6, "high_ports": 0.4,
+            "payload_entropy": 7.5, "suspicious_flags": 0.05,
+            "http_requests": 10, "dns_queries": 5, "tls_handshakes": 3
+        }'
+
     # 2. DoS Attack Simulation (Denial of Service)
-    print_demo "🔴 Testing DoS Attack (SYN Flood pattern)..."
-    curl -X POST "http://localhost:8080/detect" \
-         -H "Content-Type: application/json" \
-         -d '{
-           "features": {
-             "total_packets": 1000,
-             "total_bytes": 50000,
-             "avg_packet_size": 50.0,
-             "duration": 1.0,
-             "tcp_ratio": 0.98,
-             "udp_ratio": 0.02,
-             "icmp_ratio": 0.0,
-             "packets_per_second": 1000.0,
-             "unique_src_ips": 1,
-             "unique_dst_ips": 100,
-             "tcp_syn_ratio": 0.95,
-             "well_known_ports": 0.1,
-             "high_ports": 0.9,
-             "payload_entropy": 2.5,
-             "suspicious_flags": 0.9,
-             "http_requests": 0,
-             "dns_queries": 0,
-             "tls_handshakes": 0
-           },
-           "source_ip": "10.0.0.100",
-           "dest_ip": "192.168.1.0/24"
-         }' | jq '{prediction: .prediction, confidence: .confidence, threat_score: .threat_score, processing_time_ms: .processing_time_ms}'
-    
+    run_detect_and_index \
+        "🔴 Testing DoS Attack (SYN Flood pattern)..." \
+        "dos" "Denial of Service" "DoS SYN Flood Attack Detected" 1 \
+        "10.0.0.100" "192.168.1.10" 12345 80 "TCP" \
+        '{
+            "total_packets": 1000, "total_bytes": 50000, "avg_packet_size": 50.0,
+            "duration": 1.0, "tcp_ratio": 0.98, "udp_ratio": 0.02, "icmp_ratio": 0.0,
+            "packets_per_second": 1000.0, "unique_src_ips": 1, "unique_dst_ips": 100,
+            "tcp_syn_ratio": 0.95, "well_known_ports": 0.1, "high_ports": 0.9,
+            "payload_entropy": 2.5, "suspicious_flags": 0.9,
+            "http_requests": 0, "dns_queries": 0, "tls_handshakes": 0
+        }'
+
     # 3. Probe Attack Simulation (Port Scanning)
-    print_demo "🟡 Testing Probe Attack (Port Scan pattern)..."
-    curl -X POST "http://localhost:8080/detect" \
-         -H "Content-Type: application/json" \
-         -d '{
-           "features": {
-             "total_packets": 200,
-             "total_bytes": 12800,
-             "avg_packet_size": 64.0,
-             "duration": 2.0,
-             "tcp_ratio": 1.0,
-             "udp_ratio": 0.0,
-             "icmp_ratio": 0.0,
-             "packets_per_second": 100.0,
-             "unique_src_ips": 1,
-             "unique_dst_ips": 50,
-             "tcp_syn_ratio": 1.0,
-             "well_known_ports": 0.8,
-             "high_ports": 0.2,
-             "payload_entropy": 1.5,
-             "suspicious_flags": 0.7,
-             "http_requests": 0,
-             "dns_queries": 0,
-             "tls_handshakes": 0
-           },
-           "source_ip": "10.0.0.101",
-           "dest_ip": "192.168.1.50"
-         }' | jq '{prediction: .prediction, confidence: .confidence, threat_score: .threat_score, processing_time_ms: .processing_time_ms}'
-    
+    run_detect_and_index \
+        "🟡 Testing Probe Attack (Port Scan pattern)..." \
+        "probe" "Attempted Reconnaissance" "Port Scan Detected" 2 \
+        "10.0.0.101" "192.168.1.50" 54321 22 "TCP" \
+        '{
+            "total_packets": 200, "total_bytes": 12800, "avg_packet_size": 64.0,
+            "duration": 2.0, "tcp_ratio": 1.0, "udp_ratio": 0.0, "icmp_ratio": 0.0,
+            "packets_per_second": 100.0, "unique_src_ips": 1, "unique_dst_ips": 50,
+            "tcp_syn_ratio": 1.0, "well_known_ports": 0.8, "high_ports": 0.2,
+            "payload_entropy": 1.5, "suspicious_flags": 0.7,
+            "http_requests": 0, "dns_queries": 0, "tls_handshakes": 0
+        }'
+
     # 4. R2L Attack Simulation (Remote to Local - Password Guessing)
-    print_demo "🟠 Testing R2L Attack (Password Guessing pattern)..."
-    curl -X POST "http://localhost:8080/detect" \
-         -H "Content-Type: application/json" \
-         -d '{
-           "features": {
-             "total_packets": 50,
-             "total_bytes": 6400,
-             "avg_packet_size": 128.0,
-             "duration": 10.0,
-             "tcp_ratio": 1.0,
-             "udp_ratio": 0.0,
-             "icmp_ratio": 0.0,
-             "packets_per_second": 5.0,
-             "unique_src_ips": 1,
-             "unique_dst_ips": 1,
-             "tcp_syn_ratio": 0.2,
-             "well_known_ports": 1.0,
-             "high_ports": 0.0,
-             "payload_entropy": 6.5,
-             "suspicious_flags": 0.1,
-             "http_requests": 0,
-             "dns_queries": 0,
-             "tls_handshakes": 0
-           },
-           "source_ip": "203.0.113.100",
-           "dest_ip": "192.168.1.50"
-         }' | jq '{prediction: .prediction, confidence: .confidence, threat_score: .threat_score, processing_time_ms: .processing_time_ms}'
-    
+    run_detect_and_index \
+        "🟠 Testing R2L Attack (Password Guessing pattern)..." \
+        "r2l" "Authentication Failure" "Brute Force Login Attempt" 2 \
+        "203.0.113.100" "192.168.1.50" 45678 22 "TCP" \
+        '{
+            "total_packets": 50, "total_bytes": 6400, "avg_packet_size": 128.0,
+            "duration": 10.0, "tcp_ratio": 1.0, "udp_ratio": 0.0, "icmp_ratio": 0.0,
+            "packets_per_second": 5.0, "unique_src_ips": 1, "unique_dst_ips": 1,
+            "tcp_syn_ratio": 0.2, "well_known_ports": 1.0, "high_ports": 0.0,
+            "payload_entropy": 6.5, "suspicious_flags": 0.1,
+            "http_requests": 0, "dns_queries": 0, "tls_handshakes": 0
+        }'
+
     # 5. U2R Attack Simulation (User to Root - Buffer Overflow)
-    print_demo "🔵 Testing U2R Attack (Buffer Overflow pattern)..."
-    curl -X POST "http://localhost:8080/detect" \
-         -H "Content-Type: application/json" \
-         -d '{
-           "features": {
-             "total_packets": 10,
-             "total_bytes": 8192,
-             "avg_packet_size": 819.2,
-             "duration": 1.0,
-             "tcp_ratio": 1.0,
-             "udp_ratio": 0.0,
-             "icmp_ratio": 0.0,
-             "packets_per_second": 10.0,
-             "unique_src_ips": 1,
-             "unique_dst_ips": 1,
-             "tcp_syn_ratio": 0.1,
-             "well_known_ports": 1.0,
-             "high_ports": 0.0,
-             "payload_entropy": 7.8,
-             "suspicious_flags": 0.2,
-             "http_requests": 0,
-             "dns_queries": 0,
-             "tls_handshakes": 0
-           },
-           "source_ip": "192.168.1.100",
-           "dest_ip": "192.168.1.10"
-         }' | jq '{prediction: .prediction, confidence: .confidence, threat_score: .threat_score, processing_time_ms: .processing_time_ms}'
-    
-    # 6. Batch Detection with Mixed Traffic
+    run_detect_and_index \
+        "🔵 Testing U2R Attack (Buffer Overflow pattern)..." \
+        "u2r" "Attempted Administrator Privilege Gain" "Buffer Overflow Attempt Detected" 1 \
+        "192.168.1.100" "192.168.1.10" 33445 21 "TCP" \
+        '{
+            "total_packets": 10, "total_bytes": 8192, "avg_packet_size": 819.2,
+            "duration": 1.0, "tcp_ratio": 1.0, "udp_ratio": 0.0, "icmp_ratio": 0.0,
+            "packets_per_second": 10.0, "unique_src_ips": 1, "unique_dst_ips": 1,
+            "tcp_syn_ratio": 0.1, "well_known_ports": 1.0, "high_ports": 0.0,
+            "payload_entropy": 7.8, "suspicious_flags": 0.2,
+            "http_requests": 0, "dns_queries": 0, "tls_handshakes": 0
+        }'
+
+    # 6. Batch Detection with Mixed Traffic — vẫn xem kết quả batch,
+    #    nhưng không insert vào ES (batch API trả nhiều bản ghi, không map 1-1
+    #    theo IP/port cho từng alert; giữ nguyên mục đích minh hoạ khả năng batch).
     print_demo "📊 Testing Batch Detection with Mixed Attack Types..."
-    curl -X POST "http://localhost:8080/batch-detect" \
+    curl -s -X POST "http://localhost:8080/batch-detect" \
          -H "Content-Type: application/json" \
          -d '[
            {
              "features": {
-               "total_packets": 80,
-               "total_bytes": 8000,
-               "avg_packet_size": 100.0,
-               "duration": 3.0,
-               "tcp_ratio": 0.9,
-               "udp_ratio": 0.1,
-               "icmp_ratio": 0.0,
-               "packets_per_second": 26.7,
-               "unique_src_ips": 1,
-               "unique_dst_ips": 2,
-               "tcp_syn_ratio": 0.5,
-               "well_known_ports": 0.7,
-               "high_ports": 0.3,
-               "payload_entropy": 7.2,
-               "suspicious_flags": 0.02,
-               "http_requests": 5,
-               "dns_queries": 2,
-               "tls_handshakes": 1
+               "total_packets": 80, "total_bytes": 8000, "avg_packet_size": 100.0,
+               "duration": 3.0, "tcp_ratio": 0.9, "udp_ratio": 0.1, "icmp_ratio": 0.0,
+               "packets_per_second": 26.7, "unique_src_ips": 1, "unique_dst_ips": 2,
+               "tcp_syn_ratio": 0.5, "well_known_ports": 0.7, "high_ports": 0.3,
+               "payload_entropy": 7.2, "suspicious_flags": 0.02,
+               "http_requests": 5, "dns_queries": 2, "tls_handshakes": 1
              },
              "source_ip": "192.168.1.200"
            },
            {
              "features": {
-               "total_packets": 500,
-               "total_bytes": 25000,
-               "avg_packet_size": 50.0,
-               "duration": 0.5,
-               "tcp_ratio": 1.0,
-               "udp_ratio": 0.0,
-               "icmp_ratio": 0.0,
-               "packets_per_second": 1000.0,
-               "unique_src_ips": 1,
-               "unique_dst_ips": 50,
-               "tcp_syn_ratio": 0.98,
-               "well_known_ports": 0.2,
-               "high_ports": 0.8,
-               "payload_entropy": 2.0,
-               "suspicious_flags": 0.95,
-               "http_requests": 0,
-               "dns_queries": 0,
-               "tls_handshakes": 0
+               "total_packets": 500, "total_bytes": 25000, "avg_packet_size": 50.0,
+               "duration": 0.5, "tcp_ratio": 1.0, "udp_ratio": 0.0, "icmp_ratio": 0.0,
+               "packets_per_second": 1000.0, "unique_src_ips": 1, "unique_dst_ips": 50,
+               "tcp_syn_ratio": 0.98, "well_known_ports": 0.2, "high_ports": 0.8,
+               "payload_entropy": 2.0, "suspicious_flags": 0.95,
+               "http_requests": 0, "dns_queries": 0, "tls_handshakes": 0
              },
              "source_ip": "10.0.0.200"
            }
          ]' | jq '{batch_size: .batch_size, avg_processing_time_ms: .avg_processing_time_ms, results: .results | map({prediction: .prediction, confidence: .confidence, threat_score: .threat_score})}'
-    
-    # 7. Traffic Simulation
+
+    # 7. Traffic Simulation qua traffic-replay (sinh traffic thật cho Suricata bắt,
+    #    độc lập với các lệnh /detect ở trên — không dùng để tạo alert ES).
     print_demo "🌐 Generating Realistic Mixed Traffic Simulation..."
     curl -X POST "http://localhost:8003/replay" \
          -H "Content-Type: application/json" \
@@ -413,112 +414,15 @@ demo_realtime_detection() {
            "protocols": ["tcp", "udp"],
            "attack_types": ["dos", "probe"]
          }' 2>/dev/null | jq '.' || print_warning "Traffic replay service not available"
-    
+
     print_demo "⏳ Waiting for traffic simulation (30 seconds)..."
     sleep 5  # Reduced wait time for demo
-    
-    # 8. Create Sample Alerts in Elasticsearch
-    print_demo "📝 Creating Sample Suricata Alerts for each attack type..."
-    
-    # DoS Alert
-    curl -X POST "http://localhost:9200/suricata-alerts-$(date +%Y.%m)/_doc" \
-         -H "Content-Type: application/json" \
-         -d "{
-           \"@timestamp\": \"$(date -u +%Y-%m-%dT%H:%M:%S.000Z)\",
-           \"event_type\": \"alert\",
-           \"alert\": {
-             \"signature\": \"DoS SYN Flood Attack Detected\",
-             \"category\": \"Denial of Service\",
-             \"severity\": 1,
-             \"attack_type\": \"dos\"
-           },
-           \"src_ip\": \"10.0.0.100\",
-           \"dest_ip\": \"192.168.1.10\",
-           \"src_port\": 12345,
-           \"dest_port\": 80,
-           \"proto\": \"TCP\"
-         }" > /dev/null
-    
-    # Probe Alert
-    curl -X POST "http://localhost:9200/suricata-alerts-$(date +%Y.%m)/_doc" \
-         -H "Content-Type: application/json" \
-         -d "{
-           \"@timestamp\": \"$(date -u +%Y-%m-%dT%H:%M:%S.000Z)\",
-           \"event_type\": \"alert\",
-           \"alert\": {
-             \"signature\": \"Port Scan Detected\",
-             \"category\": \"Attempted Reconnaissance\",
-             \"severity\": 2,
-             \"attack_type\": \"probe\"
-           },
-           \"src_ip\": \"10.0.0.101\",
-           \"dest_ip\": \"192.168.1.50\",
-           \"src_port\": 54321,
-           \"dest_port\": 22,
-           \"proto\": \"TCP\"
-         }" > /dev/null
-    
-    # R2L Alert
-    curl -X POST "http://localhost:9200/suricata-alerts-$(date +%Y.%m)/_doc" \
-         -H "Content-Type: application/json" \
-         -d "{
-           \"@timestamp\": \"$(date -u +%Y-%m-%dT%H:%M:%S.000Z)\",
-           \"event_type\": \"alert\",
-           \"alert\": {
-             \"signature\": \"Brute Force Login Attempt\",
-             \"category\": \"Authentication Failure\",
-             \"severity\": 2,
-             \"attack_type\": \"r2l\"
-           },
-           \"src_ip\": \"203.0.113.100\",
-           \"dest_ip\": \"192.168.1.50\",
-           \"src_port\": 45678,
-           \"dest_port\": 22,
-           \"proto\": \"TCP\"
-         }" > /dev/null
-    
-    # U2R Alert
-    curl -X POST "http://localhost:9200/suricata-alerts-$(date +%Y.%m)/_doc" \
-         -H "Content-Type: application/json" \
-         -d "{
-           \"@timestamp\": \"$(date -u +%Y-%m-%dT%H:%M:%S.000Z)\",
-           \"event_type\": \"alert\",
-           \"alert\": {
-             \"signature\": \"Buffer Overflow Attempt Detected\",
-             \"category\": \"Attempted Administrator Privilege Gain\",
-             \"severity\": 1,
-             \"attack_type\": \"u2r\"
-           },
-           \"src_ip\": \"192.168.1.100\",
-           \"dest_ip\": \"192.168.1.10\",
-           \"src_port\": 33445,
-           \"dest_port\": 21,
-           \"proto\": \"TCP\"
-         }" > /dev/null
-    
-    # Create ML Detection Results
-    print_demo "🤖 Creating Sample ML Detection Results..."
-    curl -X POST "http://localhost:9200/ml-detections-$(date +%Y.%m)/_doc" \
-         -H "Content-Type: application/json" \
-         -d "{
-           \"@timestamp\": \"$(date -u +%Y-%m-%dT%H:%M:%S.000Z)\",
-           \"prediction\": \"attack\",
-           \"confidence\": 0.95,
-           \"threat_score\": 9.2,
-           \"model_used\": \"ensemble\",
-           \"attack_type\": \"dos\",
-           \"processing_time_ms\": 12,
-           \"src_ip\": \"10.0.0.100\",
-           \"dest_ip\": \"192.168.1.10\"
-         }" > /dev/null
-    
+
     print_success "✅ Comprehensive attack simulation completed!"
     print_success "📊 Demo Results Summary:"
-    print_success "   • Normal Traffic: Expected low threat scores"
-    print_success "   • DoS Attack: High confidence attack detection"
-    print_success "   • Probe Attack: Port scan pattern recognition"
-    print_success "   • R2L Attack: Authentication-based intrusion"
-    print_success "   • U2R Attack: Privilege escalation detection"
+    print_success "   • Mỗi alert trong suricata-alerts-* và mỗi bản ghi trong ml-detections-*"
+    print_success "     ở trên đều được tạo TỪ kết quả predict/confidence/threat_score THẬT"
+    print_success "     do realtime-detector trả về cho từng feature vector giả lập, không hardcode."
     print_success ""
     print_success "🌐 View results in Kibana: http://localhost:5601"
     print_success "   • Suricata alerts for all attack types"
