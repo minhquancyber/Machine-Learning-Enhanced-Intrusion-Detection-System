@@ -5,6 +5,7 @@ Handles loading and managing ML models for real-time detection
 
 import logging
 import joblib
+import json
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 
@@ -63,6 +64,15 @@ class ModelManager:
                 except Exception as e:
                     logger.error(f"Error loading model {model_file.name}: {str(e)}")
                     continue
+
+            # Load feature names từ file do ml-trainer ghi ra, để dựng đúng vector 122 chiều
+            feature_names_path = models_dir / "feature_names.json"
+            if feature_names_path.exists():
+                with open(feature_names_path) as f:
+                    self.feature_names = json.load(f)
+                logger.info(f"Loaded {len(self.feature_names)} feature names from feature_names.json")
+            else:
+                logger.warning("feature_names.json not found — feature vector order may be incorrect")
             
             logger.info(f"Successfully loaded {loaded_count} models")
             

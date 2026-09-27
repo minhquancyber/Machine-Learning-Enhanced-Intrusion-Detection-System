@@ -6,6 +6,7 @@ Trains and evaluates Decision Tree and k-NN models for network intrusion detecti
 import asyncio
 import logging
 import os
+import json
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 from contextlib import asynccontextmanager
@@ -165,6 +166,12 @@ async def train_models(request: TrainingRequest):
             await ml_trainer.save_model(result["model"], model_path)
             model_files[algorithm] = model_filename
             logger.info(f"Saved {algorithm} model to: {model_filename}")
+
+        # Lưu danh sách feature_names để realtime-detector dựng đúng vector đầu vào
+        feature_names_path = MODELS_DIR / "feature_names.json"
+        with open(feature_names_path, 'w') as f:
+            json.dump(list(feature_names), f)
+        logger.info(f"Saved {len(feature_names)} feature names to feature_names.json")
         
         # Calculate overall training time
         training_time = time.time() - start_time
@@ -202,7 +209,6 @@ async def train_models(request: TrainingRequest):
         results_filename = f"{dataset_stem}_training_results.json"
         results_path = RESULTS_DIR / results_filename
         with open(results_path, 'w') as f:
-            import json
             json.dump(response_data, f, indent=2, default=str)
         
         logger.info(f"Training completed successfully. Models saved: {list(model_files.keys())}")
