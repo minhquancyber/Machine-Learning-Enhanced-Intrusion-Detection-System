@@ -179,7 +179,7 @@ demo_ml_training() {
     print_demo "Running ML Training Demo with NSL-KDD Dataset..."
     
     # Train models using NSL-KDD sample dataset (will auto-download if not exists)
-    print_demo "Training Decision Tree, k-NN, and Ensemble models on NSL-KDD data..."
+    print_demo "Training Decision Tree, k-NN, Random Forest and Ensemble models on NSL-KDD data..."
     
     curl -X POST "http://localhost:8002/train" \
          -H "Content-Type: application/json" \
@@ -218,7 +218,7 @@ run_detect_and_index() {
 
     print_demo "$label"
 
-    # 1) GỌI ML THẬT — kèm attack_type để main.py ghi luôn vào bản ghi tự động
+    # 1) GỌI ML — kèm attack_type để main.py ghi luôn vào bản ghi tự động
     local detect_payload
     detect_payload=$(jq -n --argjson features "$features_json" \
         --arg src_ip "$src_ip" --arg dest_ip "$dest_ip" --arg attack_type "$attack_type" \
@@ -234,7 +234,7 @@ run_detect_and_index() {
         return 1
     fi
 
-    # 2) TRÍCH kết quả thật từ ML — không tự gán tay
+    # 2) TRÍCH kết quả  từ ML 
     local prediction confidence threat_score processing_time_ms
     prediction=$(echo "$detect_response" | jq -r '.prediction // "unknown"')
     confidence=$(echo "$detect_response" | jq -r '.confidence // 0')
@@ -292,7 +292,7 @@ run_detect_and_index() {
         print_status "  → ML gắn cờ '$prediction' → KHÔNG tạo alert (đúng như kỳ vọng cho traffic bình thường)"
     fi
 
-    print_status "  → ml-detections-* sẽ được realtime-detector tự ghi (kèm attack_type=$attack_type), không ghi tay từ script."
+    print_status "  → ml-detections-* sẽ được realtime-detector ghi (kèm attack_type=$attack_type)"
 }
 
 # Function to run real-time detection demo
@@ -419,11 +419,11 @@ demo_realtime_detection() {
     sleep 5  # Reduced wait time for demo
 
     print_success "✅ Comprehensive attack simulation completed!"
-    print_success "📊 Demo Results Summary:"
-    print_success "   • Mỗi alert trong suricata-alerts-* và mỗi bản ghi trong ml-detections-*"
-    print_success "     ở trên đều được tạo TỪ kết quả predict/confidence/threat_score THẬT"
-    print_success "     do realtime-detector trả về cho từng feature vector giả lập, không hardcode."
-    print_success ""
+#    print_success "📊 Demo Results Summary:"
+#    print_success "   • Mỗi alert trong suricata-alerts-* và mỗi bản ghi trong ml-detections-*"
+#    print_success "     ở trên đều được tạo TỪ kết quả predict/confidence/threat_score THẬT"
+#    print_success "     do realtime-detector trả về cho từng feature vector giả lập, không hardcode."
+#    print_success ""
     print_success "🌐 View results in Kibana: http://localhost:5601"
     print_success "   • Suricata alerts for all attack types"
     print_success "   • ML detection results with confidence scores"
