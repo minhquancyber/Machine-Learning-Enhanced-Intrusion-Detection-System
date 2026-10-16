@@ -115,11 +115,3 @@ After running the demo, access these interfaces:
 | **ML Detection API** | http://localhost:8080/docs | Real-time threat detection |
 | **ML Trainer API** | http://localhost:8002/docs | Model training |
 | **Feature Extractor** | http://localhost:8001/docs | PCAP analysis |
-
-## 🏆 Key Features
-
-### ✅ Production Ready
-- **One-command deployment** with Docker Compose
-- **Health monitoring** and automatic service recovery
-- **Scalable architecture** with Redis clustering support
-- **SIEM integration** with Elasticsearch and Kibana
