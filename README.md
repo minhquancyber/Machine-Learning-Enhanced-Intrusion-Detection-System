@@ -4,7 +4,6 @@
 [![Python](https://img.shields.io/badge/Python-3.9+-green)](https://python.org/)
 [![Suricata](https://img.shields.io/badge/Suricata-7.0.2-red)](https://suricata.io/)
 [![Elasticsearch](https://img.shields.io/badge/Elasticsearch-8.11.0-orange)](https://www.elastic.co/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 A production-ready Intrusion Detection System that combines **signature-based detection** (Suricata) with **machine learning** capabilities, achieving **99.2% accuracy** on the industry-standard NSL-KDD dataset.
 
